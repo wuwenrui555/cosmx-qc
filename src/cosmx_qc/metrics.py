@@ -135,7 +135,13 @@ def panel_detection_ratio_per_fov(sd: SampleData) -> pd.DataFrame:
 
 
 def expression_heatmap_data(sd: SampleData) -> dict[str, pd.DataFrame]:
-    """Per-FOV mean expression per target, split by transcript kind."""
+    """Per-FOV × per-target mean expression from exprMat, split by transcript
+    kind (gene / negative / falsecode).
+
+    Each value is the mean exprMat count across all cells of that FOV for that
+    target. Despite the function name, this is a *mean expression* metric — it
+    has nothing to do with target uniqueness; the "heatmap_data" suffix only
+    indicates the consumer (the per-kind heatmap panels)."""
     with _timed(f"[{sd.name}] expression_heatmap_data"):
         cls = classify_expr_columns(sd.exprmat)
         out = {}

@@ -78,6 +78,14 @@ cosmx-qc report --sample data_1=/path/to/data_1 --n-rows 100000 -o head.html
 
 `--n-rows N` reads only the first `N` rows of the two large flatfiles (`exprMat` and `tx`) via streaming gzip. Use it for quick debugging — adjusting plot styles, sanity-checking a new sample layout, etc. — without waiting for the full data to load.
 
+### Save plot data
+
+```bash
+cosmx-qc report --sample data_1=/path/to/data_1 --save-data ./qc_data/ -o qc.html
+```
+
+`--save-data DIR` writes the underlying DataFrame for each report section as Parquet, organised as `DIR/<sample>/<metric>.parquet` (e.g. `qc_data/data_1/assignment_ratio_per_fov.parquet`). The mean-expression heatmap is split into three files per sample (`mean_expression_gene.parquet`, `_negative.parquet`, `_falsecode.parquet`). Useful for downstream analysis or custom plotting without re-running the metric computations.
+
 ## Development
 
 ```bash

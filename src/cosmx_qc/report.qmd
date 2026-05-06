@@ -59,6 +59,33 @@ def _log_mem(label: str) -> None:
 
 from cosmx_qc import io, metrics as M, plots as P
 
+_save_dir = os.environ.get("COSMX_QC_SAVE_DATA")
+if _save_dir:
+    logger.info("Saving plot data to %s", _save_dir)
+
+
+def _save_section(name: str, data: dict) -> None:
+    """Persist per-sample plot data as Parquet under ``<_save_dir>/<sample>/``.
+
+    ``data`` is normally ``{sample: DataFrame}``. For multi-panel metrics
+    (currently only ``mean_expression``) it is ``{sample: {kind: DataFrame}}``
+    and each kind is written as ``<name>_<kind>.parquet``. No-op when the
+    ``COSMX_QC_SAVE_DATA`` env var is unset.
+    """
+    if not _save_dir:
+        return
+    for sample, payload in data.items():
+        outdir = os.path.join(_save_dir, sample)
+        os.makedirs(outdir, exist_ok=True)
+        if isinstance(payload, dict):
+            for kind, df in payload.items():
+                if df is None or len(df) == 0:
+                    continue
+                df.to_parquet(os.path.join(outdir, f"{name}_{kind}.parquet"))
+        else:
+            payload.to_parquet(os.path.join(outdir, f"{name}.parquet"))
+
+
 cfg_path = os.environ["COSMX_QC_CONFIG"]
 with open(cfg_path) as f:
     config = json.load(f)
@@ -245,10 +272,14 @@ panel-tabset; click the sample name to switch.
 
 ## Global view of entire run
 
+One row per slide: number of FOVs, cells, and transcripts.
+
 ```{python}
+_data = {name: M.global_view_table(sd) for name, sd in samples.items()}
+_save_section("global_view", _data)
 rows = []
-for name, sd in samples.items():
-    t = M.global_view_table(sd)
+for name, t in _data.items():
+    t = t.copy()
     t.insert(0, "sample", name)
     rows.append(t)
 pd.concat(rows, ignore_index=True)
@@ -256,8 +287,11 @@ pd.concat(rows, ignore_index=True)
 
 ## Profiling Position (FOV index)
 
+Physical layout of FOVs on the slide (X_mm, Y_mm), coloured by FOV number. Later plots use the same FOV indices on their x-axis.
+
 ```{python}
 #| output: asis
+_save_section("fov_positions", {n: sd.fov_pos for n, sd in samples.items()})
 emit_with_combined(lambda name, sd:
     P.plot_fov_positions(sd.fov_pos, title=name),
     label="fov_positions")
@@ -265,16 +299,21 @@ emit_with_combined(lambda name, sd:
 
 ## Unassigned transcripts
 
+Per-FOV proportion of transcripts not assigned to any segmented cell (`cell_ID == 0`). Reflects segmentation completeness.
+
 <span style="display:inline-block;width:0.9em;height:0.9em;background:green;vertical-align:middle"></span> Assigned &nbsp;&nbsp;
 <span style="display:inline-block;width:0.9em;height:0.9em;background:red;vertical-align:middle"></span> Unassigned
 
 ```{python}
 #| output: asis
 _data = metric_for_each(M.assignment_ratio_per_fov)
+_save_section("assignment_ratio_per_fov", _data)
 emit_combined_sharey(_data, P.plot_assignment_per_fov_ax)
 ```
 
-## Unique transcripts — panel detection ratio
+## Panel detection ratio
+
+Per-FOV count of distinct panel targets seen at least once, divided by the total panel size. Reflects how thoroughly each FOV samples the panel.
 
 <span style="display:inline-block;width:0.9em;height:0.9em;background:green;vertical-align:middle"></span> Detected &nbsp;&nbsp;
 <span style="display:inline-block;width:0.9em;height:0.9em;background:red;vertical-align:middle"></span> Undetected
@@ -282,19 +321,26 @@ emit_combined_sharey(_data, P.plot_assignment_per_fov_ax)
 ```{python}
 #| output: asis
 _data = metric_for_each(M.panel_detection_ratio_per_fov)
+_save_section("panel_detection_ratio_per_fov", _data)
 emit_combined_sharey(_data, P.plot_detection_per_fov_ax)
 ```
 
-## Unique transcripts — expression heatmap
+## Mean expression per target (per FOV)
+
+exprMat mean expression per FOV × per target, shown as three side-by-side heatmaps for Negative / SystemControl / Gene targets.
 
 ```{python}
 #| output: asis
+_data = {n: M.expression_heatmap_data(sd) for n, sd in samples.items()}
+_save_section("mean_expression", _data)
 emit_with_combined(lambda name, sd:
-    P.plot_expression_heatmap(M.expression_heatmap_data(sd), title=name),
+    P.plot_expression_heatmap(_data[name], title=name),
     label="expression_heatmap")
 ```
 
 # Transcripts of All (per FOV)
+
+Per-FOV total transcript count, stacked by kind (Gene / Negative / SystemControl).
 
 <span style="display:inline-block;width:0.9em;height:0.9em;background:#E74C3C;vertical-align:middle"></span> Gene &nbsp;&nbsp;
 <span style="display:inline-block;width:0.9em;height:0.9em;background:#5DADE2;vertical-align:middle"></span> Negative &nbsp;&nbsp;
@@ -303,6 +349,7 @@ emit_with_combined(lambda name, sd:
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_breakdown_per_fov)
+_save_section("transcripts_breakdown_per_fov", _data)
 _y = float(np.max(np.concatenate([
     (d["gene"] + d["negative"] + d["falsecode"]).to_numpy()
     for d in _data.values()])) * 1.05)
@@ -312,9 +359,12 @@ emit_combined_sharey(_data, P.plot_stacked_kinds_per_fov_ax,
 
 # Transcripts of Real Genes (per FOV)
 
+Per-FOV count of transcripts whose target name does not start with `Negative` or `SystemControl` — the biological gene signal.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_fov, kind="gene")
+_save_section("transcripts_per_fov_gene", _data)
 _y = y_max_across(_data, col="count")
 emit_combined_sharey(_data, P.plot_count_per_fov_ax,
                       y_col="count", ylabel="Count",
@@ -323,9 +373,12 @@ emit_combined_sharey(_data, P.plot_count_per_fov_ax,
 
 # Transcripts of Negative Probes (per FOV)
 
+Per-FOV count of Negative-probe transcripts. Negative probes are designed not to bind anything; their signal estimates the non-specific binding floor.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_fov, kind="negative")
+_save_section("transcripts_per_fov_negative", _data)
 _y = y_max_across(_data, col="count")
 emit_combined_sharey(_data, P.plot_count_per_fov_ax,
                       y_col="count", ylabel="Count",
@@ -334,9 +387,12 @@ emit_combined_sharey(_data, P.plot_count_per_fov_ax,
 
 # Transcripts of False Codes (per FOV)
 
+Per-FOV count of SystemControl codes. SystemControl barcodes do not correspond to any real target; their signal estimates the decoding error rate.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_fov, kind="falsecode")
+_save_section("transcripts_per_fov_falsecode", _data)
 _y = y_max_across(_data, col="count")
 emit_combined_sharey(_data, P.plot_count_per_fov_ax,
                       y_col="count", ylabel="Count",
@@ -355,6 +411,7 @@ estimates the decoding error rate.
 
 ```{python}
 _err_per_fov = metric_for_each(M.error_rates_per_fov)
+_save_section("error_rates_per_fov", _err_per_fov)
 ```
 
 ## Negative rate
@@ -383,9 +440,12 @@ emit_combined_sharey(_err_per_fov, P.plot_count_per_fov_ax,
 
 ## Total number of cells (per FOV)
 
+Per-FOV count of segmented cells (rows in metadata).
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.cell_count_per_fov)
+_save_section("cell_count_per_fov", _data)
 _y = y_max_across(_data, col="n_cells")
 emit_combined_sharey(_data, P.plot_count_per_fov_ax,
                       y_col="n_cells", ylabel="Cell Count",
@@ -394,9 +454,12 @@ emit_combined_sharey(_data, P.plot_count_per_fov_ax,
 
 ## Size of cells (per cell per FOV)
 
+Per-cell area (μm²) distribution within each FOV, shown as a boxplot.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.cell_area_per_fov)
+_save_section("cell_area_per_fov", _data)
 _y = y_max_across(_data, col="Area.um2", percentile=99)
 emit_combined_sharey(_data, P.plot_box_per_fov_ax,
                       y_col="Area.um2", ylabel="Cell area (um^2)",
@@ -405,9 +468,12 @@ emit_combined_sharey(_data, P.plot_box_per_fov_ax,
 
 # Transcripts of All (per cell per FOV)
 
+Per-cell sum across all exprMat columns, distributed across FOVs as a boxplot.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_cell_per_fov, kind="all")
+_save_section("transcripts_per_cell_per_fov_all", _data)
 _y = y_max_across(_data, col="count", percentile=99)
 emit_combined_sharey(_data, P.plot_box_per_fov_ax,
                       y_col="count", ylabel="Count of Transcripts",
@@ -416,9 +482,12 @@ emit_combined_sharey(_data, P.plot_box_per_fov_ax,
 
 # Transcripts of Real Genes (per cell per FOV)
 
+Per-cell sum across Gene columns only.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_cell_per_fov, kind="gene")
+_save_section("transcripts_per_cell_per_fov_gene", _data)
 _y = y_max_across(_data, col="count", percentile=99)
 emit_combined_sharey(_data, P.plot_box_per_fov_ax,
                       y_col="count", ylabel="Count of Transcripts",
@@ -427,9 +496,12 @@ emit_combined_sharey(_data, P.plot_box_per_fov_ax,
 
 # Transcripts of Negative Probes (per cell per FOV)
 
+Per-cell sum across Negative-probe columns only.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_cell_per_fov, kind="negative")
+_save_section("transcripts_per_cell_per_fov_negative", _data)
 _y = y_max_across(_data, col="count", percentile=99)
 emit_combined_sharey(_data, P.plot_box_per_fov_ax,
                       y_col="count", ylabel="Count of Transcripts",
@@ -438,9 +510,12 @@ emit_combined_sharey(_data, P.plot_box_per_fov_ax,
 
 # Transcripts of False Codes (per cell per FOV)
 
+Per-cell sum across SystemControl columns only.
+
 ```{python}
 #| output: asis
 _data = metric_for_each(M.transcripts_per_cell_per_fov, kind="falsecode")
+_save_section("transcripts_per_cell_per_fov_falsecode", _data)
 _y = y_max_across(_data, col="count", percentile=99)
 emit_combined_sharey(_data, P.plot_box_per_fov_ax,
                       y_col="count", ylabel="Count of Transcripts",
@@ -454,6 +529,7 @@ the expression matrix and shown as box plots over cells in each FOV.
 
 ```{python}
 _err_per_cell = metric_for_each(M.error_rates_per_cell_per_fov)
+_save_section("error_rates_per_cell_per_fov", _err_per_cell)
 ```
 
 ## Negative rate

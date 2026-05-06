@@ -18,15 +18,22 @@ def render_report(
     output: Path,
     title: str = "CosMx QC Report",
     n_rows: int | None = None,
+    save_data: Path | None = None,
 ) -> None:
     """Render report.qmd to `output` HTML via Quarto.
 
     The .qmd is copied into a temp dir and Quarto runs there with
     cwd=temp_dir so all aux files (`*_files/libs/...`) land alongside
     the output. The final HTML is then moved to the user's path.
+
+    When `save_data` is given, the report also writes each section's
+    plot data to `<save_data>/<sample>/<metric>.parquet`.
     """
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+    if save_data is not None:
+        save_data = Path(save_data).resolve()
+        save_data.mkdir(parents=True, exist_ok=True)
 
     qmd_src = files("cosmx_qc").joinpath("report.qmd")
     payload = {
@@ -45,6 +52,8 @@ def render_report(
         cfg_path = f.name
     try:
         env = {**os.environ, "COSMX_QC_CONFIG": cfg_path, "COSMX_QC_LOG": str(log_path)}
+        if save_data is not None:
+            env["COSMX_QC_SAVE_DATA"] = str(save_data)
         with tempfile.TemporaryDirectory(prefix="cosmx_qc_") as render_dir:
             render_dir = Path(render_dir)
             qmd_local = render_dir / "report.qmd"
