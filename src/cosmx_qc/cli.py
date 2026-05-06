@@ -110,10 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument(
         "--threads",
         type=int,
-        default=8,
+        default=4,
         dest="threads",
         metavar="N",
-        help="Cap thread pools (polars / OpenBLAS / MKL / OpenMP) to N during render. Default 8.",
+        help="Cap thread pools (polars / OpenBLAS / MKL / OpenMP) to N during render. Default 4.",
     )
     return p
 

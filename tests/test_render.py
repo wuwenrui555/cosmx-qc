@@ -103,7 +103,7 @@ def test_render_report_omits_save_data_env_var_by_default(tmp_path):
     assert "COSMX_QC_SAVE_DATA" not in captured["env"]
 
 
-def test_render_report_thread_env_vars_default_8(tmp_path):
+def test_render_report_thread_env_vars_default_4(tmp_path):
     output = tmp_path / "out.html"
     captured: dict = {}
     with patch(
@@ -111,7 +111,7 @@ def test_render_report_thread_env_vars_default_8(tmp_path):
     ):
         R.render_report(samples={"A": tmp_path / "a"}, output=output, title="T")
     for k in _THREAD_ENV_KEYS:
-        assert captured["env"][k] == "8"
+        assert captured["env"][k] == "4"
 
 
 def test_render_report_thread_env_vars_explicit(tmp_path):

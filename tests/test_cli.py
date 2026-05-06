@@ -223,10 +223,10 @@ def test_cmd_report_default_save_data_none(tmp_path):
     assert kwargs["save_data"] is None
 
 
-def test_argparse_threads_default_8():
+def test_argparse_threads_default_4():
     parser = C.build_parser()
     args = parser.parse_args(["report", "--sample", "A=/a", "-o", "out.html"])
-    assert args.threads == 8
+    assert args.threads == 4
 
 
 def test_argparse_threads_explicit():

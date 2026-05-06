@@ -19,7 +19,7 @@ def render_report(
     title: str = "CosMx QC Report",
     n_rows: int | None = None,
     save_data: Path | None = None,
-    threads: int = 8,
+    threads: int = 4,
 ) -> None:
     """Render report.qmd to `output` HTML via Quarto.
 
