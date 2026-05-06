@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -54,3 +55,62 @@ def test_render_report_creates_output_parent(tmp_path):
         R.render_report(samples={"A": tmp_path}, output=output, title="X")
     assert output.parent.exists()
     assert output.exists()
+
+
+def _capture_env_quarto_run(captured: dict):
+    """Like `_fake_quarto_run` but captures the env passed to subprocess."""
+
+    def fake_run(cmd, env=None, check=False, cwd=None, **kw):
+        captured["env"] = env
+        (Path(cwd) / "report.html").write_text("<html></html>")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    return fake_run
+
+
+_THREAD_ENV_KEYS = (
+    "POLARS_MAX_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OMP_NUM_THREADS",
+)
+
+
+def test_render_report_thread_env_vars_default_8(tmp_path):
+    output = tmp_path / "out.html"
+    captured: dict = {}
+    with patch(
+        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)
+    ):
+        R.render_report(samples={"A": tmp_path / "a"}, output=output, title="T")
+    for k in _THREAD_ENV_KEYS:
+        assert captured["env"][k] == "8"
+
+
+def test_render_report_thread_env_vars_explicit(tmp_path):
+    output = tmp_path / "out.html"
+    captured: dict = {}
+    with patch(
+        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)
+    ):
+        R.render_report(
+            samples={"A": tmp_path / "a"}, output=output, title="T", threads=4
+        )
+    for k in _THREAD_ENV_KEYS:
+        assert captured["env"][k] == "4"
+
+
+def test_render_report_thread_env_does_not_leak_to_parent(tmp_path):
+    """Setting threads inside the subprocess env must not mutate os.environ."""
+    before = {k: os.environ.get(k) for k in _THREAD_ENV_KEYS}
+    with patch(
+        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run({})
+    ):
+        R.render_report(
+            samples={"A": tmp_path / "a"},
+            output=tmp_path / "out.html",
+            title="T",
+            threads=2,
+        )
+    after = {k: os.environ.get(k) for k in _THREAD_ENV_KEYS}
+    assert before == after

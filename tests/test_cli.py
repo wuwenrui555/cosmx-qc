@@ -160,6 +160,51 @@ def test_cmd_report_config_file(tmp_path):
     assert kwargs["title"] == "Cfg"
 
 
+def test_argparse_threads_default_8():
+    parser = C.build_parser()
+    args = parser.parse_args(["report", "--sample", "A=/a", "-o", "out.html"])
+    assert args.threads == 8
+
+
+def test_argparse_threads_explicit():
+    parser = C.build_parser()
+    args = parser.parse_args(
+        ["report", "--sample", "A=/a", "--threads", "4", "-o", "out.html"]
+    )
+    assert args.threads == 4
+
+
+def test_cmd_report_passes_threads(tmp_path):
+    d = tmp_path / "S"
+    d.mkdir()
+    for pat in [
+        "x_exprMat_file.csv.gz",
+        "x_metadata_file.csv.gz",
+        "x_tx_file.csv.gz",
+        "x_fov_positions_file.csv.gz",
+    ]:
+        (d / pat).write_bytes(b"")
+    parser = C.build_parser()
+    args = parser.parse_args(
+        [
+            "report",
+            "--sample",
+            f"S={d}",
+            "--threads",
+            "2",
+            "-o",
+            str(tmp_path / "r.html"),
+        ]
+    )
+    with (
+        patch("cosmx_qc.cli.check_quarto_installed", return_value="q"),
+        patch("cosmx_qc.cli.render_report") as rr,
+    ):
+        C.cmd_report(args)
+    kwargs = rr.call_args.kwargs or rr.call_args[1]
+    assert kwargs["threads"] == 2
+
+
 def test_cmd_report_explicit_title_overrides_config(tmp_path):
     d = tmp_path / "S"
     d.mkdir()

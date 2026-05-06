@@ -78,6 +78,14 @@ cosmx-qc report --sample data_1=/path/to/data_1 --n-rows 100000 -o head.html
 
 `--n-rows N` reads only the first `N` rows of the two large flatfiles (`exprMat` and `tx`) via streaming gzip. Use it for quick debugging — adjusting plot styles, sanity-checking a new sample layout, etc. — without waiting for the full data to load.
 
+### Limit thread usage
+
+```bash
+cosmx-qc report --sample data_1=/path/to/data_1 --threads 8 -o qc.html
+```
+
+`--threads N` (default `8`) caps the worker pools that the render uses internally — `polars` for CSV reading, OpenBLAS / MKL via `numpy` for groupby/sum aggregations, and OpenMP. Without this cap, those libraries default to one thread per core and can saturate a shared machine. The cap is applied to the Quarto subprocess environment only; your shell's existing thread settings are untouched.
+
 ## Development
 
 ```bash

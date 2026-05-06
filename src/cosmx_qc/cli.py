@@ -99,6 +99,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="n_rows",
         help="Limit exprMat and tx reads to first N rows (fast iteration on Pembro-scale samples)",
     )
+    rep.add_argument(
+        "--threads",
+        type=int,
+        default=8,
+        dest="threads",
+        metavar="N",
+        help="Cap thread pools (polars / OpenBLAS / MKL / OpenMP) to N during render. Default 8.",
+    )
     return p
 
 
@@ -113,7 +121,13 @@ def cmd_report(args: argparse.Namespace) -> None:
         sys.exit(f"error: --output must end in '.html' (got {args.output})")
     validate_samples(samples)
     check_quarto_installed()
-    render_report(samples=samples, output=args.output, title=title, n_rows=args.n_rows)
+    render_report(
+        samples=samples,
+        output=args.output,
+        title=title,
+        n_rows=args.n_rows,
+        threads=args.threads,
+    )
 
 
 def main() -> None:
