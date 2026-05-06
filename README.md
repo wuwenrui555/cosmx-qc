@@ -89,10 +89,10 @@ cosmx-qc report --sample data_1=/path/to/data_1 --save-data ./qc_data/ -o qc.htm
 ### Limit thread usage
 
 ```bash
-cosmx-qc report --sample data_1=/path/to/data_1 --threads 8 -o qc.html
+cosmx-qc report --sample data_1=/path/to/data_1 --threads 4 -o qc.html
 ```
 
-`--threads N` (default `8`) caps the worker pools that the render uses internally — `polars` for CSV reading, OpenBLAS / MKL via `numpy` for groupby/sum aggregations, and OpenMP. Without this cap, those libraries default to one thread per core and can saturate a shared machine. The cap is applied to the Quarto subprocess environment only; your shell's existing thread settings are untouched.
+`--threads N` (default `4`) caps the worker pools that the render uses internally — `polars` for CSV reading, OpenBLAS / MKL via `numpy` for groupby/sum aggregations, and OpenMP. Without this cap, those libraries default to one thread per core and can saturate a shared machine. The cap is applied to the Quarto subprocess environment only; your shell's existing thread settings are untouched.
 
 ## Development
 
