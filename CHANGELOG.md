@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-06
+
+### Added
+
+- `--save-data DIR` CLI flag: also write each report section's underlying DataFrame as Parquet, organised as `DIR/<sample>/<metric>.parquet`. The mean-expression heatmap is split into three files per sample (gene / negative / falsecode).
+- `--threads N` CLI flag (default `4`): cap the worker pools the render uses internally (`polars`, `OpenBLAS` / `MKL` via `numpy`, OpenMP). Set on the Quarto subprocess env only; the parent shell is untouched.
+- Per-section description paragraphs in the QC report (each section now explains what its data is).
+- README: previously-undocumented `--output` and `--title` flags now have their own subsections, including title resolution order.
+
+### Changed
+
+- Report section title `Unique transcripts — panel detection ratio` → `Panel detection ratio`.
+- Report section title `Unique transcripts — expression heatmap` → `Mean expression per target (per FOV)`. The previous title implied uniqueness; the metric has always been per-FOV mean expression per target. `expression_heatmap_data` docstring updated to match.
+- README: replaced the numbered usage subsections (`Inline samples` / `Config file` / `Fast iteration` / `Save plot data` / `Limit thread usage`) with a single `Flags` reference section plus a POSIX-style synopsis. Sample-layout section now states explicitly that the `AtoMx/` subtree is the raw export and documents the lab data standard for the sample-root directory name.
+
+### Removed
+
+- **Breaking**: `io.resolve_flatfiles_dir` no longer does the one-level subdirectory fallback. It now accepts only the flatfiles directory itself or an AtoMx-style sample root containing `AtoMx/flatFiles/<run>/`. Hand-organised layouts that relied on the fallback need to be reorganised.
+
 ## [0.1.1] - 2026-05-06
 
 ### Fixed

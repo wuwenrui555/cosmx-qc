@@ -1,6 +1,6 @@
 [project]
 name = "cosmx-qc"
-version = "0.1.1"
+version = "0.2.0"
 description = "Quarto-based QC report tool for CosMx spatial-transcriptomics flatfiles"
 authors = [
     {name = "Wenrui Wu", email = "wuwenruiwwr@outlook.com"},
