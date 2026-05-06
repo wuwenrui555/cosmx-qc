@@ -161,12 +161,10 @@ def _has_all_flatfiles(dir: Path) -> bool:
 def resolve_flatfiles_dir(dir: Path) -> Path:
     """Find the actual flatfiles directory under `dir`.
 
-    Accepts any of:
+    Accepts either of:
     - the flatfiles directory itself (e.g. `Pembro7/RNA_flatfiles/`)
     - the AtoMx-style sample root that contains
       `AtoMx/flatFiles/<run_subdir>/` (e.g. `cosmx_backup/<sample>/`)
-    - a parent that has exactly one immediate child satisfying either
-      of the above (e.g. `Pembro7/`)
 
     Raises FileNotFoundError if nothing matches.
     """
@@ -198,16 +196,9 @@ def resolve_flatfiles_dir(dir: Path) -> Path:
     else:
         logger.info("  step 2 miss: no AtoMx/flatFiles/ directory")
 
-    # 3) one level down (e.g. user passed sample-root for Pembro-style)
-    for c in sorted(p for p in dir.iterdir() if p.is_dir()):
-        if _has_all_flatfiles(c):
-            logger.info("  step 3 hit: child %s", c.name)
-            return c
-    logger.info("  step 3 miss: no immediate subdir had all 4 files")
-
     raise FileNotFoundError(
-        f"{dir} (and AtoMx/flatFiles/*, immediate subdirs) does not "
-        f"contain a directory with all four required flatfiles."
+        f"{dir} (and AtoMx/flatFiles/*) does not contain a directory "
+        f"with all four required flatfiles."
     )
 
 

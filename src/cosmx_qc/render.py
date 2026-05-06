@@ -18,15 +18,28 @@ def render_report(
     output: Path,
     title: str = "CosMx QC Report",
     n_rows: int | None = None,
+    save_data: Path | None = None,
+    threads: int = 4,
 ) -> None:
     """Render report.qmd to `output` HTML via Quarto.
 
     The .qmd is copied into a temp dir and Quarto runs there with
     cwd=temp_dir so all aux files (`*_files/libs/...`) land alongside
     the output. The final HTML is then moved to the user's path.
+
+    When `save_data` is given, the report also writes each section's
+    plot data to `<save_data>/<sample>/<metric>.parquet`.
+
+    `threads` caps the worker pools that report execution spawns
+    (polars CSV reader, OpenBLAS / MKL via numpy, OpenMP) so the render
+    does not claim every core on a shared machine. Set in the Quarto
+    subprocess env only — the parent shell's environment is untouched.
     """
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+    if save_data is not None:
+        save_data = Path(save_data).resolve()
+        save_data.mkdir(parents=True, exist_ok=True)
 
     qmd_src = files("cosmx_qc").joinpath("report.qmd")
     payload = {
@@ -44,7 +57,21 @@ def render_report(
         json.dump(payload, f)
         cfg_path = f.name
     try:
-        env = {**os.environ, "COSMX_QC_CONFIG": cfg_path, "COSMX_QC_LOG": str(log_path)}
+        env = {
+            **os.environ,
+            "COSMX_QC_CONFIG": cfg_path,
+            "COSMX_QC_LOG": str(log_path),
+            # Standard env-var names that polars / OpenBLAS / MKL / OpenMP
+            # themselves read on import. They cannot be renamed — these are
+            # the keys the libraries look for. Set on the child env only,
+            # so the parent shell's thread settings are not modified.
+            "POLARS_MAX_THREADS": str(threads),
+            "OPENBLAS_NUM_THREADS": str(threads),
+            "MKL_NUM_THREADS": str(threads),
+            "OMP_NUM_THREADS": str(threads),
+        }
+        if save_data is not None:
+            env["COSMX_QC_SAVE_DATA"] = str(save_data)
         with tempfile.TemporaryDirectory(prefix="cosmx_qc_") as render_dir:
             render_dir = Path(render_dir)
             qmd_local = render_dir / "report.qmd"
