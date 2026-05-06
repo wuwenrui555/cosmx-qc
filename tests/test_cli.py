@@ -211,9 +211,7 @@ def test_cmd_report_default_save_data_none(tmp_path):
     ]:
         (d / pat).write_bytes(b"")
     parser = C.build_parser()
-    args = parser.parse_args(
-        ["report", "--sample", f"S={d}", "-o", str(tmp_path / "r.html")]
-    )
+    args = parser.parse_args(["report", "--sample", f"S={d}", "-o", str(tmp_path / "r.html")])
     with (
         patch("cosmx_qc.cli.check_quarto_installed", return_value="q"),
         patch("cosmx_qc.cli.render_report") as rr,
@@ -231,9 +229,7 @@ def test_argparse_threads_default_4():
 
 def test_argparse_threads_explicit():
     parser = C.build_parser()
-    args = parser.parse_args(
-        ["report", "--sample", "A=/a", "--threads", "4", "-o", "out.html"]
-    )
+    args = parser.parse_args(["report", "--sample", "A=/a", "--threads", "4", "-o", "out.html"])
     assert args.threads == 4
 
 
