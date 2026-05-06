@@ -80,9 +80,7 @@ def test_render_report_passes_save_data_env_var(tmp_path):
     output = tmp_path / "out.html"
     save_dir = tmp_path / "qc_data"
     captured: dict = {}
-    with patch(
-        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)
-    ):
+    with patch("cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)):
         R.render_report(
             samples={"A": tmp_path / "a"},
             output=output,
@@ -96,9 +94,7 @@ def test_render_report_passes_save_data_env_var(tmp_path):
 def test_render_report_omits_save_data_env_var_by_default(tmp_path):
     output = tmp_path / "out.html"
     captured: dict = {}
-    with patch(
-        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)
-    ):
+    with patch("cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)):
         R.render_report(samples={"A": tmp_path / "a"}, output=output, title="T")
     assert "COSMX_QC_SAVE_DATA" not in captured["env"]
 
@@ -106,9 +102,7 @@ def test_render_report_omits_save_data_env_var_by_default(tmp_path):
 def test_render_report_thread_env_vars_default_4(tmp_path):
     output = tmp_path / "out.html"
     captured: dict = {}
-    with patch(
-        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)
-    ):
+    with patch("cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)):
         R.render_report(samples={"A": tmp_path / "a"}, output=output, title="T")
     for k in _THREAD_ENV_KEYS:
         assert captured["env"][k] == "4"
@@ -117,12 +111,8 @@ def test_render_report_thread_env_vars_default_4(tmp_path):
 def test_render_report_thread_env_vars_explicit(tmp_path):
     output = tmp_path / "out.html"
     captured: dict = {}
-    with patch(
-        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)
-    ):
-        R.render_report(
-            samples={"A": tmp_path / "a"}, output=output, title="T", threads=4
-        )
+    with patch("cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run(captured)):
+        R.render_report(samples={"A": tmp_path / "a"}, output=output, title="T", threads=4)
     for k in _THREAD_ENV_KEYS:
         assert captured["env"][k] == "4"
 
@@ -130,9 +120,7 @@ def test_render_report_thread_env_vars_explicit(tmp_path):
 def test_render_report_thread_env_does_not_leak_to_parent(tmp_path):
     """Setting threads inside the subprocess env must not mutate os.environ."""
     before = {k: os.environ.get(k) for k in _THREAD_ENV_KEYS}
-    with patch(
-        "cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run({})
-    ):
+    with patch("cosmx_qc.render.subprocess.run", side_effect=_capture_env_quarto_run({})):
         R.render_report(
             samples={"A": tmp_path / "a"},
             output=tmp_path / "out.html",
