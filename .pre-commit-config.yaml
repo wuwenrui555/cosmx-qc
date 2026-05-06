@@ -11,3 +11,4 @@ repos:
     hooks:
       - id: markdownlint
         args: [--config, .markdownlint.json]
+        exclude: ^docs/(specs|plans)/
