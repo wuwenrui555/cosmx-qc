@@ -86,6 +86,14 @@ cosmx-qc report --sample data_1=/path/to/data_1 --save-data ./qc_data/ -o qc.htm
 
 `--save-data DIR` writes the underlying DataFrame for each report section as Parquet, organised as `DIR/<sample>/<metric>.parquet` (e.g. `qc_data/data_1/assignment_ratio_per_fov.parquet`). The mean-expression heatmap is split into three files per sample (`mean_expression_gene.parquet`, `_negative.parquet`, `_falsecode.parquet`). Useful for downstream analysis or custom plotting without re-running the metric computations.
 
+### Limit thread usage
+
+```bash
+cosmx-qc report --sample data_1=/path/to/data_1 --threads 8 -o qc.html
+```
+
+`--threads N` (default `8`) caps the worker pools that the render uses internally — `polars` for CSV reading, OpenBLAS / MKL via `numpy` for groupby/sum aggregations, and OpenMP. Without this cap, those libraries default to one thread per core and can saturate a shared machine. The cap is applied to the Quarto subprocess environment only; your shell's existing thread settings are untouched.
+
 ## Development
 
 ```bash
