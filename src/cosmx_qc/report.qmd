@@ -1,0 +1,492 @@
+---
+title: "CosMx QC Report"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    theme: cosmo
+    code-fold: true
+    code-tools: false
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{python}
+#| label: setup
+import base64
+import io as _io
+import json
+import logging
+import os
+import resource
+import sys
+import time
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from PIL import Image
+
+_log_handlers = [logging.StreamHandler(sys.stderr)]
+_log_path = os.environ.get("COSMX_QC_LOG")
+if _log_path:
+    _log_handlers.append(logging.FileHandler(_log_path, mode="w"))
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=_log_handlers,
+    force=True,
+)
+logger = logging.getLogger("cosmx_qc")
+
+
+def _rss_gb() -> float:
+    """Peak resident-set size in GB (Linux: KB units; macOS: bytes)."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss / 1024**3 if sys.platform == "darwin" else rss / 1024**2
+
+
+def _log_mem(label: str) -> None:
+    logger.info("[mem] %s: %.1f GB peak RSS", label, _rss_gb())
+
+
+from cosmx_qc import io, metrics as M, plots as P
+
+cfg_path = os.environ["COSMX_QC_CONFIG"]
+with open(cfg_path) as f:
+    config = json.load(f)
+
+n_rows = config.get("n_rows")
+_t_start = time.monotonic()
+logger.info("Render starting; samples=%s n_rows=%s",
+            list(config["samples"]), n_rows)
+samples = {name: io.load_sample(name, path, n_rows=n_rows)
+           for name, path in config["samples"].items()}
+sample_names = list(samples.keys())
+_t_loaded = time.monotonic()
+_log_mem("after sample load")
+logger.info("Load phase took %.1fs (%d sample(s)); entering report sections",
+            _t_loaded - _t_start, len(sample_names))
+
+
+def _fig_to_md_img(fig) -> str:
+    """Render a matplotlib Figure to an inline base64 markdown image."""
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return f"![](data:image/png;base64,{b64})"
+
+
+def emit_per_sample_tabs(plot_fn) -> None:
+    """Emit panel-tabset with one tab per sample.
+
+    `plot_fn(name, sd)` must return a Figure. Must be called from a
+    chunk with `#| output: asis`.
+    """
+    print("\n::: {.panel-tabset}\n")
+    for name in sample_names:
+        print(f"### {name}\n")
+        fig = plot_fn(name, samples[name])
+        print(_fig_to_md_img(fig))
+        print()
+    print(":::\n")
+
+
+def _hstack_pngs(png_bytes_list: list[bytes]) -> str:
+    """Horizontally combine rendered PNGs and return base64 markdown."""
+    pils = [Image.open(_io.BytesIO(b)) for b in png_bytes_list]
+    h = max(im.height for im in pils)
+    pils = [im if im.height == h else im.resize(
+        (max(1, int(h * im.width / im.height)), h),
+        Image.Resampling.LANCZOS) for im in pils]
+    w = sum(im.width for im in pils)
+    canvas = Image.new("RGB", (w, h), "white")
+    x = 0
+    for im in pils:
+        canvas.paste(im, (x, 0))
+        x += im.width
+    out = _io.BytesIO()
+    canvas.save(out, format="PNG")
+    return f"![](data:image/png;base64,{base64.b64encode(out.getvalue()).decode()})"
+
+
+def emit_with_combined(plot_fn, label: str = "section") -> None:
+    """Emit a Combined tab (PIL-hstacked) plus per-sample tabs.
+
+    Use this for plots that don't share a Y axis cleanly across
+    samples (FOV-position scatter, expression heatmap). For everything
+    else, use `emit_combined_sharey` so the Combined view is a single
+    Figure with `sharey=True`.
+
+    `plot_fn(name, sd)` must return a Figure.
+    """
+    _t = time.monotonic()
+    logger.info("[plot] %s: rendering %d sample(s) (PIL hstack)",
+                label, len(sample_names))
+    pngs: list[bytes] = []
+    md_per_sample: list[tuple[str, str]] = []
+    for name in sample_names:
+        fig = plot_fn(name, samples[name])
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        data = buf.getvalue()
+        pngs.append(data)
+        md_per_sample.append(
+            (name, f"![](data:image/png;base64,{base64.b64encode(data).decode()})")
+        )
+
+    combined_md = _hstack_pngs(pngs)
+    print("\n::: {.panel-tabset}\n")
+    print("### Combined\n")
+    print(combined_md)
+    print()
+    for name, md in md_per_sample:
+        print(f"### {name}\n")
+        print(md)
+        print()
+    print(":::\n")
+    logger.info("[plot] %s done %.1fs", label, time.monotonic() - _t)
+
+
+def metric_for_each(metric_fn, *args, **kwargs) -> dict:
+    """Run a metric once per sample, return ``{name: df}``.
+
+    Cache point: pass the resulting dict to BOTH `y_max_across` and
+    `emit_combined_sharey` so the metric isn't recomputed.
+    """
+    return {n: metric_fn(sd, *args, **kwargs) for n, sd in samples.items()}
+
+
+def emit_combined_sharey(by_sample: dict, plot_ax_fn, **plot_kwargs) -> None:
+    """Combined = single Figure with sharey across sample panels.
+
+    `by_sample` is the per-sample data dict (see `metric_for_each`).
+    `plot_ax_fn(ax, df, *, title, show_ylabel, **plot_kwargs)` draws
+    into the given ax. Per-sample tabs each render their own standalone
+    Figure via the same `plot_ax_fn`.
+    """
+    label = plot_ax_fn.__name__.replace("plot_", "").replace("_ax", "")
+    _t = time.monotonic()
+    logger.info("[plot] %s: rendering %d sample(s) (sharey)",
+                label, len(by_sample))
+
+    combined_fig = P.make_combined_sharey(by_sample, plot_ax_fn, **plot_kwargs)
+    combined_md = _fig_to_md_img(combined_fig)
+
+    sample_md = []
+    for name, df in by_sample.items():
+        f, ax = plt.subplots(figsize=P.FIGSIZE_BAR)
+        plot_ax_fn(ax, df, title=name, show_ylabel=True, **plot_kwargs)
+        sample_md.append((name, _fig_to_md_img(f)))
+
+    print("\n::: {.panel-tabset}\n")
+    print("### Combined\n")
+    print(combined_md)
+    print()
+    for name, md in sample_md:
+        print(f"### {name}\n")
+        print(md)
+        print()
+    print(":::\n")
+    logger.info("[plot] %s done %.1fs", label, time.monotonic() - _t)
+
+
+def y_max_across(by_sample: dict, col: str | None = None,
+                  percentile: float = 100,
+                  padding: float = 1.05) -> float | None:
+    """Global y-axis max across pre-computed sample data.
+
+    Default = absolute max × 1.05 (for bar charts; no outlier flier
+    distortion). Box plots pass `percentile=99` to keep the box body
+    visible (extreme fliers overflow the axis — QC-informative).
+
+    Returns None when no data is available.
+    """
+    arrays: list[np.ndarray] = []
+    for df in by_sample.values():
+        if col is None:
+            arr = np.asarray(df).flatten()
+        else:
+            arr = (df[col].dropna().to_numpy()
+                   if col in df.columns else np.array([]))
+        arrays.append(arr)
+    if not arrays:
+        return None
+    arr = np.concatenate(arrays)
+    if arr.dtype.kind == "f":
+        arr = arr[~np.isnan(arr)]
+    if len(arr) == 0:
+        return None
+    if percentile >= 100:
+        cap = float(np.max(arr))
+    else:
+        cap = float(np.percentile(arr, percentile))
+    return cap * padding
+```
+
+# CosMx introduction
+
+CosMx Spatial Molecular Imager (SMI) is a high-plex spatial transcriptomics
+platform that detects individual RNA molecules in fixed tissue with
+sub-cellular resolution. This report summarises per-FOV and per-cell
+quality metrics across the configured samples. Each metric appears in a
+panel-tabset; click the sample name to switch.
+
+# Overview (per FOV)
+
+## Global view of entire run
+
+```{python}
+rows = []
+for name, sd in samples.items():
+    t = M.global_view_table(sd)
+    t.insert(0, "sample", name)
+    rows.append(t)
+pd.concat(rows, ignore_index=True)
+```
+
+## Profiling Position (FOV index)
+
+```{python}
+#| output: asis
+emit_with_combined(lambda name, sd:
+    P.plot_fov_positions(sd.fov_pos, title=name),
+    label="fov_positions")
+```
+
+## Unassigned transcripts
+
+<span style="display:inline-block;width:0.9em;height:0.9em;background:green;vertical-align:middle"></span> Assigned &nbsp;&nbsp;
+<span style="display:inline-block;width:0.9em;height:0.9em;background:red;vertical-align:middle"></span> Unassigned
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.assignment_ratio_per_fov)
+emit_combined_sharey(_data, P.plot_assignment_per_fov_ax)
+```
+
+## Unique transcripts — panel detection ratio
+
+<span style="display:inline-block;width:0.9em;height:0.9em;background:green;vertical-align:middle"></span> Detected &nbsp;&nbsp;
+<span style="display:inline-block;width:0.9em;height:0.9em;background:red;vertical-align:middle"></span> Undetected
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.panel_detection_ratio_per_fov)
+emit_combined_sharey(_data, P.plot_detection_per_fov_ax)
+```
+
+## Unique transcripts — expression heatmap
+
+```{python}
+#| output: asis
+emit_with_combined(lambda name, sd:
+    P.plot_expression_heatmap(M.expression_heatmap_data(sd), title=name),
+    label="expression_heatmap")
+```
+
+# Transcripts of All (per FOV)
+
+<span style="display:inline-block;width:0.9em;height:0.9em;background:#E74C3C;vertical-align:middle"></span> Gene &nbsp;&nbsp;
+<span style="display:inline-block;width:0.9em;height:0.9em;background:#5DADE2;vertical-align:middle"></span> Negative &nbsp;&nbsp;
+<span style="display:inline-block;width:0.9em;height:0.9em;background:#52C785;vertical-align:middle"></span> SystemControl
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_breakdown_per_fov)
+_y = float(np.max(np.concatenate([
+    (d["gene"] + d["negative"] + d["falsecode"]).to_numpy()
+    for d in _data.values()])) * 1.05)
+emit_combined_sharey(_data, P.plot_stacked_kinds_per_fov_ax,
+                      percent=False, y_max=_y)
+```
+
+# Transcripts of Real Genes (per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_fov, kind="gene")
+_y = y_max_across(_data, col="count")
+emit_combined_sharey(_data, P.plot_count_per_fov_ax,
+                      y_col="count", ylabel="Count",
+                      color=P.COLORS["gene"], y_max=_y)
+```
+
+# Transcripts of Negative Probes (per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_fov, kind="negative")
+_y = y_max_across(_data, col="count")
+emit_combined_sharey(_data, P.plot_count_per_fov_ax,
+                      y_col="count", ylabel="Count",
+                      color=P.COLORS["negative"], y_max=_y)
+```
+
+# Transcripts of False Codes (per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_fov, kind="falsecode")
+_y = y_max_across(_data, col="count")
+emit_combined_sharey(_data, P.plot_count_per_fov_ax,
+                      y_col="count", ylabel="Count",
+                      color=P.COLORS["falsecode"], y_max=_y)
+```
+
+# Overall Error Rates (per FOV)
+
+`Negative rate = sum(Negative) / sum(Gene)` per FOV. Negative probes are
+designed *not* to bind anything biological; their signal estimates the
+non-specific-binding floor.
+
+`False-code rate = sum(SystemControl) / sum(Gene)` per FOV. SystemControl
+codes are barcodes that don't map to any real target; their signal
+estimates the decoding error rate.
+
+```{python}
+_err_per_fov = metric_for_each(M.error_rates_per_fov)
+```
+
+## Negative rate
+
+```{python}
+#| output: asis
+_y = y_max_across(_err_per_fov, col="negative_rate")
+emit_combined_sharey(_err_per_fov, P.plot_count_per_fov_ax,
+                      y_col="negative_rate",
+                      ylabel="Negative rate (Negative / Gene)",
+                      color=P.COLORS["negative"], y_max=_y)
+```
+
+## False-code rate
+
+```{python}
+#| output: asis
+_y = y_max_across(_err_per_fov, col="false_code_rate")
+emit_combined_sharey(_err_per_fov, P.plot_count_per_fov_ax,
+                      y_col="false_code_rate",
+                      ylabel="False-code rate (SystemControl / Gene)",
+                      color=P.COLORS["falsecode"], y_max=_y)
+```
+
+# Cell number and size
+
+## Total number of cells (per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.cell_count_per_fov)
+_y = y_max_across(_data, col="n_cells")
+emit_combined_sharey(_data, P.plot_count_per_fov_ax,
+                      y_col="n_cells", ylabel="Cell Count",
+                      color=P.COLORS["neutral"], y_max=_y)
+```
+
+## Size of cells (per cell per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.cell_area_per_fov)
+_y = y_max_across(_data, col="Area.um2", percentile=99)
+emit_combined_sharey(_data, P.plot_box_per_fov_ax,
+                      y_col="Area.um2", ylabel="Cell area (um^2)",
+                      color=P.COLORS["neutral"], y_max=_y)
+```
+
+# Transcripts of All (per cell per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_cell_per_fov, kind="all")
+_y = y_max_across(_data, col="count", percentile=99)
+emit_combined_sharey(_data, P.plot_box_per_fov_ax,
+                      y_col="count", ylabel="Count of Transcripts",
+                      color=P.COLORS["neutral"], y_max=_y)
+```
+
+# Transcripts of Real Genes (per cell per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_cell_per_fov, kind="gene")
+_y = y_max_across(_data, col="count", percentile=99)
+emit_combined_sharey(_data, P.plot_box_per_fov_ax,
+                      y_col="count", ylabel="Count of Transcripts",
+                      color=P.COLORS["gene"], y_max=_y)
+```
+
+# Transcripts of Negative Probes (per cell per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_cell_per_fov, kind="negative")
+_y = y_max_across(_data, col="count", percentile=99)
+emit_combined_sharey(_data, P.plot_box_per_fov_ax,
+                      y_col="count", ylabel="Count of Transcripts",
+                      color=P.COLORS["negative"], y_max=_y)
+```
+
+# Transcripts of False Codes (per cell per FOV)
+
+```{python}
+#| output: asis
+_data = metric_for_each(M.transcripts_per_cell_per_fov, kind="falsecode")
+_y = y_max_across(_data, col="count", percentile=99)
+emit_combined_sharey(_data, P.plot_box_per_fov_ax,
+                      y_col="count", ylabel="Count of Transcripts",
+                      color=P.COLORS["falsecode"], y_max=_y)
+```
+
+# Overall Error Rates (per cell per FOV)
+
+Same definitions as the per-FOV rates above, but computed per cell from
+the expression matrix and shown as box plots over cells in each FOV.
+
+```{python}
+_err_per_cell = metric_for_each(M.error_rates_per_cell_per_fov)
+```
+
+## Negative rate
+
+```{python}
+#| output: asis
+_y = y_max_across(_err_per_cell, col="negative_rate", percentile=99)
+emit_combined_sharey(_err_per_cell, P.plot_box_per_fov_ax,
+                      y_col="negative_rate",
+                      ylabel="Negative rate (Negative / Gene, per cell)",
+                      color=P.COLORS["negative"], y_max=_y)
+```
+
+## False-code rate
+
+```{python}
+#| output: asis
+_y = y_max_across(_err_per_cell, col="false_code_rate", percentile=99)
+emit_combined_sharey(_err_per_cell, P.plot_box_per_fov_ax,
+                      y_col="false_code_rate",
+                      ylabel="False-code rate (SystemControl / Gene, per cell)",
+                      color=P.COLORS["falsecode"], y_max=_y)
+```
+
+```{python}
+#| label: summary
+_t_end = time.monotonic()
+_log_mem("after all sections")
+logger.info("=" * 60)
+logger.info("Render finished in %.1f min total "
+            "(load %.1fs, sections %.1fs)",
+            (_t_end - _t_start) / 60.0,
+            _t_loaded - _t_start,
+            _t_end - _t_loaded)
+logger.info("=" * 60)
+```
